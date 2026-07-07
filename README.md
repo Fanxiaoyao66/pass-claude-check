@@ -17,6 +17,14 @@ $env:FUCLAUDE_REMOTE_DRIVE = "W:"
 
 如果想长期生效，可以把这些变量写入用户环境变量，或者直接改 `fuclaude-host.ps1` 顶部的默认值。
 
+我自己的环境里用的是 `reclaude`，所以包装器默认在虚拟机里执行 `reclaude`。如果你用的是原生 Claude CLI，思路完全一样，只需要把包装器执行的远端命令改成 `claude`：
+
+```powershell
+$env:FUCLAUDE_REMOTE_COMMAND = "claude"
+```
+
+也可以直接把 `fuclaude-host.ps1` 里的默认值从 `reclaude` 改成 `claude`。
+
 <br />
 
 <br />
@@ -185,6 +193,8 @@ W:\project-a
 ## 包装命令做了什么
 
 `fuclaude` 本质上不是新的 AI 工具，它只是一个入口。
+
+本文用 `reclaude` 举例，因为我的日常入口是 `reclaude`。如果你使用的是原生 `claude` 命令，也不需要改整体方案，只要把包装器最后执行的命令从 `reclaude` 换成 `claude` 即可。
 
 它做四件事：
 
