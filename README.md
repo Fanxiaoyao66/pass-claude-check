@@ -1,4 +1,9 @@
 ﻿# 如何在不更改本机时区的基础上无感绕过 Claude 对时区、字体、环境的检测
+ 
+claude看到的时区在美国，运行环境也是纯净无中文的虚拟机。
+
+ <img width="2946" height="1908" alt="image" src="https://github.com/user-attachments/assets/0e062bc2-11d6-4542-a9d1-79e42fb8184e" />
+
 
 > 这是一个把 Claude 运行环境放进 VMware Windows 虚拟机、把宿主机工作目录和配置目录共享过去、再通过 `fuclaude` 包装命令无感调用虚拟机 `reclaude` 的方案。
 >
