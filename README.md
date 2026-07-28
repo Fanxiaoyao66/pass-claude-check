@@ -5,7 +5,7 @@ claude看到的时区在美国，运行环境也是纯净无中文的虚拟机�
  <img width="2946" height="1908" alt="image" src="https://github.com/user-attachments/assets/0e062bc2-11d6-4542-a9d1-79e42fb8184e" />
 
 
-> 这是一个把 Claude 运行环境放进 VMware Windows 虚拟机、把宿主机工作目录和配置目录共享过去、再通过 `fuclaude` 包装命令无感调用虚拟机 `reclaude` 的方案。
+> 这是一个把 Claude 运行环境放进 VMware Windows 虚拟机、把宿主机工作目录和配置目录共享过去、再通过 `fuclaude` 包装命令无感调用虚拟机官方 `claude` 的方案。
 >
 > 目标是保留宿主机的编辑体验，同时让 Claude 实际运行在干净、稳定、可重建的虚拟机环境里，用于绕过 Claude 对时区、字体、语言环境等本机状态的检测误判。
 
@@ -15,6 +15,7 @@ claude看到的时区在美国，运行环境也是纯净无中文的虚拟机�
 
 ```powershell
 $env:FUCLAUDE_SSH_TARGET = "windows-user@192.168.77.128"
+$env:FUCLAUDE_SSH_KEY = "$HOME\.ssh\id_ed25519_fuclaude_vm"
 $env:FUCLAUDE_HOST_ROOT = "D:\working"
 $env:FUCLAUDE_REMOTE_ROOT = "\\vmware-host\Shared Folders\working"
 $env:FUCLAUDE_REMOTE_DRIVE = "W:"
@@ -22,13 +23,13 @@ $env:FUCLAUDE_REMOTE_DRIVE = "W:"
 
 如果想长期生效，可以把这些变量写入用户环境变量，或者直接改 `fuclaude-host.ps1` 顶部的默认值。
 
-我自己的环境里用的是 `reclaude`，所以包装器默认在虚拟机里执行 `reclaude`。如果你用的是原生 Claude CLI，思路完全一样，只需要把包装器执行的远端命令改成 `claude`：
+包装器默认在虚拟机里执行官方 `claude`。它会先从 PATH 查找；如果未找到，还会检查当前虚拟机用户的 `~\.local\bin\claude.exe`。如需调用其他兼容命令，可以覆盖：
 
 ```powershell
-$env:FUCLAUDE_REMOTE_COMMAND = "claude"
+$env:FUCLAUDE_REMOTE_COMMAND = "your-command"
 ```
 
-也可以直接把 `fuclaude-host.ps1` 里的默认值从 `reclaude` 改成 `claude`。
+Claude 的 `-c`、`--resume`、`--model` 等参数会原样透传给远端命令。
 
 <br />
 
@@ -141,7 +142,7 @@ C:\Users\<vm-user>\.claude.json
 
 ### 第三层是命令包装。
 
-宿主机上放一个 `fuclaude` 命令。它读取当前目录，判断这个目录在 `D:\working` 下的相对路径，然后通过 SSH 登录虚拟机，把共享目录映射成远端盘符，再运行虚拟机里的 `reclaude`。
+宿主机上放一个 `fuclaude` 命令。它读取当前目录，判断这个目录在 `D:\working` 下的相对路径，然后通过 SSH 登录虚拟机，把共享目录映射成远端盘符，再运行虚拟机里的官方 `claude`。
 
 例如宿主机当前目录是：
 
@@ -158,7 +159,7 @@ W:\project-a
 然后执行：
 
 ```text
-reclaude
+claude
 ```
 
 感受到的是：我在本机项目目录里输入 `fuclaude`，Claude 就在健康的虚拟机环境里开始工作。
@@ -199,14 +200,14 @@ W:\project-a
 
 `fuclaude` 本质上不是新的 AI 工具，它只是一个入口。
 
-本文用 `reclaude` 举例，因为我的日常入口是 `reclaude`。如果你使用的是原生 `claude` 命令，也不需要改整体方案，只要把包装器最后执行的命令从 `reclaude` 换成 `claude` 即可。
+包装器默认使用原生 `claude` 命令，也可以通过 `FUCLAUDE_REMOTE_COMMAND` 覆盖为其他兼容入口。
 
 它做四件事：
 
 1. 读取宿主机当前目录。
 2. 确认当前目录位于配置好的工作根目录下。
 3. 把宿主机路径转换成虚拟机里的共享路径。
-4. 通过 SSH 到虚拟机，在对应目录下运行 `reclaude`。
+4. 通过 SSH 到虚拟机，在对应目录下运行官方 `claude`。
 
 为了避免每次输入密码，宿主机会生成一把专用 SSH key，并把公钥放进虚拟机的 OpenSSH 授权文件里。这样 `fuclaude` 可以无感登录。
 
@@ -298,7 +299,7 @@ fuclaude
 
 * `.claude.json` 已经放进共享位置，并由宿主机用户目录链接过去。
 
-* `fuclaude` 位于 PATH 中，并且不会覆盖原本的 `reclaude` 命令。
+* `fuclaude` 位于 PATH 中，并且不会覆盖原本的 `claude` 命令。
 
 * SSH 专用 key 已生成，且 `fuclaude` 使用这把 key 登录虚拟机。
 
@@ -318,7 +319,7 @@ fuclaude
 
 * `C:\Users\<vm-user>\.claude.json` 链接到共享 `.claude.json`。
 
-* 虚拟机内能直接找到并执行 `reclaude`。
+* 虚拟机内能直接找到并执行 `claude`，或已安装到 `~\.local\bin\claude.exe`。
 
 ### 运行时
 

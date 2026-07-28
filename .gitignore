@@ -1,4 +1,5 @@
 .DS_Store
 Thumbs.db
 *.log
-
+.ssh/
+id_ed25519_fuclaude_vm*
