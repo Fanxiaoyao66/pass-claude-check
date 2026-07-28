@@ -1,16 +1,16 @@
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
-    [string[]] $ReclaudeArgs
+    [string[]] $ForwardedArgs
 )
 
 $ErrorActionPreference = 'Stop'
 
-$sshTarget = if ($env:FUCLAUDE_SSH_TARGET) { $env:FUCLAUDE_SSH_TARGET } elseif ($env:RECLAUDE_SSH_TARGET) { $env:RECLAUDE_SSH_TARGET } else { 'windows-user@192.168.77.128' }
-$sshKey = if ($env:FUCLAUDE_SSH_KEY) { $env:FUCLAUDE_SSH_KEY } elseif ($env:RECLAUDE_SSH_KEY) { $env:RECLAUDE_SSH_KEY } else { Join-Path $env:USERPROFILE '.ssh\id_ed25519_reclaude_vm' }
-$hostRoot = if ($env:FUCLAUDE_HOST_ROOT) { $env:FUCLAUDE_HOST_ROOT } elseif ($env:RECLAUDE_HOST_ROOT) { $env:RECLAUDE_HOST_ROOT } else { 'D:\working' }
-$remoteRoot = if ($env:FUCLAUDE_REMOTE_ROOT) { $env:FUCLAUDE_REMOTE_ROOT } elseif ($env:RECLAUDE_REMOTE_ROOT) { $env:RECLAUDE_REMOTE_ROOT } else { '\\vmware-host\Shared Folders\working' }
-$remoteDrive = if ($env:FUCLAUDE_REMOTE_DRIVE) { $env:FUCLAUDE_REMOTE_DRIVE.TrimEnd('\') } elseif ($env:RECLAUDE_REMOTE_DRIVE) { $env:RECLAUDE_REMOTE_DRIVE.TrimEnd('\') } else { 'W:' }
-$remoteCommand = if ($env:FUCLAUDE_REMOTE_COMMAND) { $env:FUCLAUDE_REMOTE_COMMAND } elseif ($env:RECLAUDE_REMOTE_COMMAND) { $env:RECLAUDE_REMOTE_COMMAND } else { 'reclaude' }
+$sshTarget = if ($env:FUCLAUDE_SSH_TARGET) { $env:FUCLAUDE_SSH_TARGET } else { 'windows-user@192.168.77.128' }
+$sshKey = if ($env:FUCLAUDE_SSH_KEY) { $env:FUCLAUDE_SSH_KEY } else { Join-Path $env:USERPROFILE '.ssh\id_ed25519_fuclaude_vm' }
+$hostRoot = if ($env:FUCLAUDE_HOST_ROOT) { $env:FUCLAUDE_HOST_ROOT } else { 'D:\working' }
+$remoteRoot = if ($env:FUCLAUDE_REMOTE_ROOT) { $env:FUCLAUDE_REMOTE_ROOT } else { '\\vmware-host\Shared Folders\working' }
+$remoteDrive = if ($env:FUCLAUDE_REMOTE_DRIVE) { $env:FUCLAUDE_REMOTE_DRIVE.TrimEnd('\') } else { 'W:' }
+$remoteCommand = if ($env:FUCLAUDE_REMOTE_COMMAND) { $env:FUCLAUDE_REMOTE_COMMAND } else { 'claude' }
 
 function Normalize-LocalPath([string] $path) {
     return [System.IO.Path]::GetFullPath($path).TrimEnd('\')
@@ -46,8 +46,8 @@ if ($relativePath -eq '.') {
 }
 
 $argText = ''
-if ($ReclaudeArgs.Count -gt 0) {
-    $argText = ' ' + (($ReclaudeArgs | ForEach-Object { Quote-PowerShellLiteral $_ }) -join ' ')
+if ($ForwardedArgs.Count -gt 0) {
+    $argText = ' ' + (($ForwardedArgs | ForEach-Object { Quote-PowerShellLiteral $_ }) -join ' ')
 }
 
 $remoteScript = @"
@@ -69,11 +69,22 @@ if (`$shareRoot.StartsWith('\\')) {
     }
 }
 Set-Location -LiteralPath `$remotePath
-& $(Quote-PowerShellLiteral $remoteCommand)$argText
+`$commandName = $(Quote-PowerShellLiteral $remoteCommand)
+`$resolvedCommand = Get-Command `$commandName -ErrorAction SilentlyContinue | Select-Object -First 1
+if (`$resolvedCommand) {
+    `$commandPath = `$resolvedCommand.Source
+} else {
+    `$localBinCommand = Join-Path `$env:USERPROFILE ".local\bin\`$commandName.exe"
+    if (-not (Test-Path -LiteralPath `$localBinCommand)) {
+        throw "Official Claude Code was not found on the VM. Install it there or set FUCLAUDE_REMOTE_COMMAND."
+    }
+    `$commandPath = `$localBinCommand
+}
+& `$commandPath$argText
 exit `$LASTEXITCODE
 "@
 
-if (($env:FUCLAUDE_DRY_RUN -eq '1') -or ($env:RECLAUDE_DRY_RUN -eq '1')) {
+if ($env:FUCLAUDE_DRY_RUN -eq '1') {
     Write-Output "sshTarget=$sshTarget"
     Write-Output "sshKey=$sshKey"
     Write-Output "hostPath=$currentFull"
