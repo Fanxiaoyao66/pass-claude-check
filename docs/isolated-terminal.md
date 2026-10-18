@@ -116,6 +116,8 @@ fureclaude update-claude         # 更新独立的 Claude 程序副本
 
 鼠标滚轮在 Claude 全屏界面内滚动。示例 `keybindings.json` 把 `Alt+K` / `Alt+J` 绑定到 `scroll:pageUp` / `scroll:pageDown`。已有快捷键配置时应合并 `Scroll` 段，不要直接覆盖整个文件。
 
+`Ctrl+V` 和直接右键都可以粘贴中文。启用鼠标事件后，终端原本会把右键交给远端应用；转发器将无修饰键的右键点击转换为宿主机剪贴板文本粘贴，并继续转发滚轮和其他鼠标事件。只有点击右键时才读取剪贴板，文本用括号粘贴序列包裹，支持多行内容。修改转发代码后需重启会话。
+
 交互会话通过 `ssh -T` 传输输入和窗口尺寸，由虚拟机内的 OpenConsole 创建终端；这避免了验证环境中 Windows 自带 SSH 终端丢失鼠标事件的问题。已验证滚轮上下滚动、快捷键翻页、中文粘贴、窗口尺寸同步和正常退出。
 
 管理命令、`-p` / `--print` 和重定向调用沿用原 SSH 通道。交互通道目前返回 OpenConsole 的退出状态，不保证传出内部 Claude 的退出码；需要检查命令退出码的自动化应使用非交互通道。
@@ -150,3 +152,14 @@ Remove-Item Env:FURECLAUDE_LEGACY_TTY
 - 交互会话打不开：检查 `OpenConsole.exe`、服务脚本和 C# 文件是否齐全且架构匹配；可先用 `FURECLAUDE_LEGACY_TTY=1` 验证原 SSH 通道。
 - 报 linked profile path：检查独立 `home` 目录是否误用了原认证目录的符号链接或目录联接。
 - 首次 SSH 连接应先单独完成并确认可用，尤其是密码登录或有口令的密钥；终端转发通道不会提供专用的密码输入界面。
+
+## 开发验证
+
+以下回归测试无需连接虚拟机，也不会读取真实剪贴板：
+
+```powershell
+powershell.exe -NoProfile -File tests\Test-TerminalUnicode.ps1
+powershell.exe -NoProfile -File tests\Test-TerminalPaste.ps1
+```
+
+测试覆盖 Windows 原生输入记录中的中文、全角标点、emoji 代理对，以及右键按下/释放、跨批次鼠标序列、滚轮、普通快捷键和粘贴内容中的转义序列。实际 SSH 验证另外覆盖多行中文粘贴和滚轮事件。

@@ -6,6 +6,7 @@ using System.Text;
 using System.Threading;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using Microsoft.Win32.SafeHandles;
 
 public static class FureclaudeTerminal
@@ -21,10 +22,17 @@ public static class FureclaudeTerminal
     [DllImport("kernel32.dll")] static extern IntPtr OpenThread(uint access, bool inherit, uint id);
     [DllImport("kernel32.dll")] static extern bool CancelSynchronousIo(IntPtr thread);
     [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr h);
+    [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr owner);
+    [DllImport("user32.dll")] static extern bool CloseClipboard();
+    [DllImport("user32.dll")] static extern IntPtr GetClipboardData(uint format);
+    [DllImport("kernel32.dll")] static extern IntPtr GlobalLock(IntPtr memory);
+    [DllImport("kernel32.dll")] static extern bool GlobalUnlock(IntPtr memory);
     [DllImport("kernel32.dll", SetLastError=true)] static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref SecurityAttributes sa, uint size);
     [DllImport("kernel32.dll")] static extern bool SetHandleInformation(IntPtr h, uint mask, uint flags);
     [DllImport("kernel32.dll", EntryPoint="ReadConsoleInputW")] static extern bool ReadConsoleInput(IntPtr h, [Out] InputRecord[] records, uint count, out uint read);
-    [StructLayout(LayoutKind.Explicit, Size=20)] struct InputRecord {
+    // ReadConsoleInputW writes a WCHAR. Without Unicode layout, the marshaller
+    // treats Character as an ANSI byte and corrupts pasted CJK/surrogate pairs.
+    [StructLayout(LayoutKind.Explicit, Size=20, CharSet=CharSet.Unicode)] struct InputRecord {
         [FieldOffset(0)] public ushort Type;
         [FieldOffset(4)] public int Down;
         [FieldOffset(8)] public ushort Repeat;
@@ -114,6 +122,94 @@ public static class FureclaudeTerminal
         return ReadExact(s, n);
     }
 
+    static string ReadClipboardText()
+    {
+        // Read the host clipboard only in response to an explicit right click.
+        for (int attempt = 0; attempt < 3; attempt++) {
+            if (!OpenClipboard(IntPtr.Zero)) { Thread.Sleep(10); continue; }
+            try {
+                IntPtr handle = GetClipboardData(13); // CF_UNICODETEXT
+                if (handle == IntPtr.Zero) return "";
+                IntPtr text = GlobalLock(handle);
+                if (text == IntPtr.Zero) return "";
+                try { return Marshal.PtrToStringUni(text) ?? ""; }
+                finally { GlobalUnlock(handle); }
+            } finally { CloseClipboard(); }
+        }
+        return "";
+    }
+
+    // Mouse reporting captures Windows Terminal's usual right-click paste.
+    // Route an unmodified SGR right click to a host clipboard paste while
+    // forwarding wheel/other mouse events. Sequences can span native reads.
+    public sealed class InputRouter
+    {
+        readonly Action<string> send;
+        readonly Func<string> clipboard;
+        readonly object gate = new object();
+        readonly StringBuilder routed = new StringBuilder();
+        string pending = "";
+        bool inPaste;
+        DateTime pendingSince;
+        const string PasteStart = "\x1b[200~", PasteEnd = "\x1b[201~", MouseStart = "\x1b[<";
+        static readonly Regex Mouse = new Regex(@"^\x1b\[<(\d+);(\d+);(\d+)([Mm])");
+        static readonly Regex MousePrefix = new Regex(@"^\x1b\[<[0-9;]*$");
+
+        public InputRouter(Action<string> send, Func<string> clipboard) { this.send = send; this.clipboard = clipboard; }
+        void Emit(int count) { if (count > 0) { routed.Append(pending.Substring(0, count)); pending = pending.Substring(count); } }
+        void FlushOutput() { if (routed.Length > 0) { string text = routed.ToString(); routed.Clear(); send(text); } }
+        public void Feed(string text)
+        {
+            lock (gate) {
+                pending += text;
+                while (pending.Length > 0) {
+                    if (inPaste) {
+                        int end = pending.IndexOf(PasteEnd, StringComparison.Ordinal);
+                        if (end >= 0) { Emit(end + PasteEnd.Length); inPaste = false; continue; }
+                        int keep = Math.Min(pending.Length, PasteEnd.Length - 1);
+                        while (keep > 0 && !PasteEnd.StartsWith(pending.Substring(pending.Length - keep), StringComparison.Ordinal)) keep--;
+                        Emit(pending.Length - keep); break;
+                    }
+                    int escape = pending.IndexOf('\x1b');
+                    if (escape < 0) { Emit(pending.Length); break; }
+                    if (escape > 0) { Emit(escape); continue; }
+                    if (pending.StartsWith(PasteStart, StringComparison.Ordinal)) { Emit(PasteStart.Length); inPaste = true; continue; }
+                    if (PasteStart.StartsWith(pending, StringComparison.Ordinal) || MouseStart.StartsWith(pending, StringComparison.Ordinal)) break;
+                    Match mouse = Mouse.Match(pending);
+                    if (mouse.Success) {
+                        if (mouse.Groups[1].Value == "2") {
+                            pending = pending.Substring(mouse.Length);
+                            if (mouse.Groups[4].Value == "M") {
+                                string pasted = clipboard();
+                                if (!String.IsNullOrEmpty(pasted)) {
+                                    // Do not allow clipboard control codes to end the paste wrapper.
+                                    pasted = Regex.Replace(pasted, @"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "");
+                                    routed.Append(PasteStart + pasted + PasteEnd);
+                                }
+                            }
+                        } else { Emit(mouse.Length); }
+                        continue;
+                    }
+                    if (pending.Length < 64 && MousePrefix.IsMatch(pending)) break;
+                    Emit(1);
+                }
+                pendingSince = DateTime.UtcNow;
+                // Preserve each native input batch as one write when possible;
+                // splitting every escape prefix confuses older console hosts.
+                FlushOutput();
+            }
+        }
+        public void FlushIdle()
+        {
+            lock (gate) {
+                // A standalone Escape must still cancel a menu promptly.
+                if (!inPaste && pending.Length > 0 && (DateTime.UtcNow - pendingSince).TotalMilliseconds >= 75)
+                    Emit(pending.Length);
+                FlushOutput();
+            }
+        }
+    }
+
     public static int Client(string ssh, string[] args)
     {
         IntPtr input = GetStdHandle(-10), output = GetStdHandle(-11);
@@ -132,10 +228,20 @@ public static class FureclaudeTerminal
             int cols = Console.WindowWidth, rows = Console.WindowHeight;
             Send(toVm, gate, 82, Size(cols, rows), 4);
             writer = new Worker(delegate() { p.StandardOutput.BaseStream.CopyTo(Console.OpenStandardOutput()); });
+            var encoder = Encoding.UTF8.GetEncoder();
+            var router = new InputRouter(delegate(string text) {
+                char[] chars = text.ToCharArray();
+                byte[] bytes = new byte[Encoding.UTF8.GetMaxByteCount(chars.Length)];
+                int length = encoder.GetBytes(chars, 0, chars.Length, bytes, 0, false);
+                for (int at = 0; at < length; at += 32768) {
+                    int n = Math.Min(32768, length-at); var part = new byte[n]; Array.Copy(bytes, at, part, 0, n);
+                    Send(toVm, gate, 73, part, n);
+                }
+            }, ReadClipboardText);
             reader = new Worker(delegate() {
                 // ReadConsoleInput preserves VT characters. ReadFile can instead
                 // return Windows' encoded key-event packets on recent ConPTY.
-                var events = new InputRecord[128]; var encoder = Encoding.UTF8.GetEncoder();
+                var events = new InputRecord[128];
                 try {
                     uint count;
                     while (ReadConsoleInput(input, events, (uint)events.Length, out count)) {
@@ -146,18 +252,13 @@ public static class FureclaudeTerminal
                                 text.Append(e.Character, Math.Max(1, (int)e.Repeat));
                         }
                         if (text.Length == 0) continue;
-                        char[] chars = text.ToString().ToCharArray();
-                        byte[] bytes = new byte[Encoding.UTF8.GetMaxByteCount(chars.Length)];
-                        int length = encoder.GetBytes(chars, 0, chars.Length, bytes, 0, false);
-                        for (int at = 0; at < length; at += 32768) {
-                            int n = Math.Min(32768, length-at); var part = new byte[n]; Array.Copy(bytes, at, part, 0, n);
-                            Send(toVm, gate, 73, part, n);
-                        }
+                        router.Feed(text.ToString());
                     }
                 }
                 finally { try { toVm.Close(); } catch (IOException) {} }
             });
             while (!p.WaitForExit(150)) {
+                router.FlushIdle();
                 int c = Console.WindowWidth, r = Console.WindowHeight;
                 if (c > 0 && r > 0 && (c != cols || r != rows)) {
                     Send(toVm, gate, 82, Size(c, r), 4); cols = c; rows = r;
