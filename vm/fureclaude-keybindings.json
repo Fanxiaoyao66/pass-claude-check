@@ -1,0 +1,12 @@
+{
+  "$schema": "https://www.schemastore.org/claude-code-keybindings.json",
+  "bindings": [
+    {
+      "context": "Scroll",
+      "bindings": {
+        "meta+k": "scroll:pageUp",
+        "meta+j": "scroll:pageDown"
+      }
+    }
+  ]
+}

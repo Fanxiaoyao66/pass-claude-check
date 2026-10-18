@@ -3,3 +3,13 @@ Thumbs.db
 *.log
 .ssh/
 id_ed25519_fuclaude_vm*
+
+# Local installations and credentials must never be published.
+*.exe
+*.dll
+*.pdb
+.claude/
+.claude.json*
+.reclaude/
+.local/
+home/

@@ -70,6 +70,7 @@ if (`$shareRoot.StartsWith('\\')) {
 }
 Set-Location -LiteralPath `$remotePath
 `$commandName = $(Quote-PowerShellLiteral $remoteCommand)
+`$commandName = [Environment]::ExpandEnvironmentVariables(`$commandName)
 `$resolvedCommand = Get-Command `$commandName -ErrorAction SilentlyContinue | Select-Object -First 1
 if (`$resolvedCommand) {
     `$commandPath = `$resolvedCommand.Source
